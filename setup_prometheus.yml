@@ -1,0 +1,120 @@
+- name: Create DigitalOcean Droplet and Configure Prometheus
+  hosts: localhost
+  gather_facts: no
+  vars:
+    do_token: "dop_v1_cb367dc98be26444567c587ac68639e28e24f625e82c91d0412df1091c168ebd"
+    ssh_pub_key_path: "~/.ssh/id_rsa.pub"
+    droplet_name: "prometheus-server"
+    droplet_region: "nyc3"
+    droplet_size: "s-1vcpu-2gb"
+    droplet_image: "ubuntu-22-04-x64"
+
+  tasks:
+    - name: Upload SSH key to DigitalOcean
+      community.digitalocean.digital_ocean_sshkey:
+        oauth_token: "{{ do_token }}"
+        state: present
+        name: "prometheus-ssh-key"
+        ssh_pub_key: "{{ lookup('file', ssh_pub_key_path) }}"
+      register: ssh_key_response
+
+    - name: Set the SSH fingerprint
+      set_fact:
+        ssh_fingerprint: "{{ ssh_key_response.data.ssh_key.fingerprint }}"
+
+    - name: Create a DigitalOcean droplet
+      community.digitalocean.digital_ocean_droplet:
+        oauth_token: "{{ do_token }}"
+        name: "{{ droplet_name }}"
+        region: "{{ droplet_region }}"
+        size: "{{ droplet_size }}"
+        image: "{{ droplet_image }}"
+        ssh_keys: "{{ ssh_fingerprint }}"
+      register: droplet
+
+    - name: Debug droplet information
+      debug:
+        var: droplet
+
+    - name: Wait for the droplet to become reachable
+      wait_for:
+        host: "{{ droplet.data.droplet.networks.v4[0].ip_address }}"
+        port: 22
+        timeout: 300
+      delegate_to: localhost
+
+    - name: Add droplet IP to inventory
+      add_host:
+        name: prometheus_droplet
+        ansible_host: "{{ droplet.data.droplet.networks.v4[0].ip_address }}"
+        ansible_user: root
+
+- name: Configure Prometheus
+  hosts: prometheus_droplet
+  become: yes
+  vars:
+    prometheus_version: "2.45.0"
+  tasks:
+    - name: Update and install required packages
+      apt:
+        update_cache: yes
+        name: "{{ item }}"
+        state: present
+      loop:
+        - wget
+        - tar
+        - curl
+        - apt-transport-https
+
+    - name: Download Prometheus
+      shell: |
+        wget https://github.com/prometheus/prometheus/releases/download/v{{ prometheus_version }}/prometheus-{{ prometheus_version }}.linux-amd64.tar.gz
+        tar -xvf prometheus-{{ prometheus_version }}.linux-amd64.tar.gz
+        mv prometheus-{{ prometheus_version }}.linux-amd64 /opt/prometheus
+      args:
+        chdir: /tmp
+
+    - name: Create Prometheus user
+      user:
+        name: prometheus
+        shell: /usr/sbin/nologin
+
+    - name: Set ownership for Prometheus files
+      file:
+        path: /opt/prometheus
+        state: directory
+        owner: prometheus
+        group: prometheus
+        recurse: yes
+
+    - name: Configure Prometheus service
+      copy:
+        dest: /etc/systemd/system/prometheus.service
+        content: |
+          [Unit]
+          Description=Prometheus
+          After=network.target
+
+          [Service]
+          User=prometheus
+          Group=prometheus
+          ExecStart=/opt/prometheus/prometheus \
+            --config.file=/opt/prometheus/prometheus.yml \
+            --storage.tsdb.path=/opt/prometheus/data
+
+          [Install]
+          WantedBy=multi-user.target
+
+    - name: Reload systemd and start Prometheus
+      systemd:
+        daemon_reload: yes
+        name: prometheus
+        enabled: yes
+        state: started
+
+    - name: Open Prometheus port in UFW
+      ufw:
+        rule: allow
+        port: 9090
+        proto: tcp
+
