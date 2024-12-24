@@ -1,0 +1,25 @@
+---
+- name: Create DigitalOcean Droplet
+  hosts: localhost
+  gather_facts: no
+  vars_files:
+    - secrets.yml
+  roles:
+    - role: provision_droplet
+
+- name: Configure Prometheus on Droplet
+  hosts: localhost
+  gather_facts: no
+  tasks:
+    - name: Add droplet IP to runtime inventory
+      add_host:
+        name: prometheus_droplet
+        ansible_host: "{{ droplet_ip }}"
+        ansible_user: root
+
+- name: Configure Prometheus
+  hosts: prometheus_droplet
+  become: yes
+  roles:
+    - role: configure_prometheus
+

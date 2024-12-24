@@ -1,0 +1,33 @@
+---
+- name: Upload SSH key to DigitalOcean
+  community.digitalocean.digital_ocean_sshkey:
+    oauth_token: "{{ do_token }}"
+    state: present
+    name: "prometheus-ssh-key"
+    ssh_pub_key: "{{ lookup('file', ssh_pub_key_path) }}"
+  register: ssh_key_response
+
+- name: Set the SSH fingerprint
+  set_fact:
+    ssh_fingerprint: "{{ ssh_key_response.data.ssh_key.fingerprint }}"
+
+- name: Create a DigitalOcean droplet
+  community.digitalocean.digital_ocean_droplet:
+    oauth_token: "{{ do_token }}"
+    name: "{{ droplet_name }}"
+    region: "{{ droplet_region }}"
+    size: "{{ droplet_size }}"
+    image: "{{ droplet_image }}"
+    ssh_keys: "{{ ssh_fingerprint }}"
+  register: droplet
+
+- name: Wait for the droplet to become reachable
+  wait_for:
+    host: "{{ droplet.data.droplet.networks.v4[0].ip_address }}"
+    port: 22
+    timeout: 300
+
+- name: Add droplet IP to host facts
+  set_fact:
+    droplet_ip: "{{ droplet.data.droplet.networks.v4[0].ip_address }}"
+

@@ -1,0 +1,51 @@
+---
+- name: Update and install required packages
+  apt:
+    update_cache: yes
+    name: "{{ item }}"
+    state: present
+  loop:
+    - wget
+    - tar
+    - curl
+    - apt-transport-https
+
+- name: Download Prometheus
+  shell: |
+    wget https://github.com/prometheus/prometheus/releases/download/v{{ prometheus_version }}/prometheus-{{ prometheus_version }}.linux-amd64.tar.gz
+    tar -xvf prometheus-{{ prometheus_version }}.linux-amd64.tar.gz
+    mv prometheus-{{ prometheus_version }}.linux-amd64 /opt/prometheus
+  args:
+    chdir: /tmp
+
+- name: Create Prometheus user
+  user:
+    name: prometheus
+    shell: /usr/sbin/nologin
+
+- name: Set ownership for Prometheus files
+  file:
+    path: /opt/prometheus
+    state: directory
+    owner: prometheus
+    group: prometheus
+    recurse: yes
+
+- name: Configure Prometheus service
+  template:
+    src: prometheus.service.j2
+    dest: /etc/systemd/system/prometheus.service
+
+- name: Reload systemd and start Prometheus
+  systemd:
+    daemon_reload: yes
+    name: prometheus
+    enabled: yes
+    state: started
+
+- name: Open Prometheus port in UFW
+  ufw:
+    rule: allow
+    port: 9090
+    proto: tcp
+
